@@ -1,0 +1,7 @@
+kill $(ps aux | grep '[d]fs' | awk '{print $2}')
+ps aux | grep dfs
+ps aux | grep dfs
+./dfs ./dfs1 10001 &
+./dfs ./dfs2 10002 &
+./dfs ./dfs3 10003 &
+./dfs ./dfs4 10004 &

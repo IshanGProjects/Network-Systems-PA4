@@ -1,0 +1,8 @@
+# Ignoring specific directories
+dfs1/
+dfs2/
+dfs3/
+dfs4/
+
+# Ignoring specific file
+dfs.dSYM/
