@@ -1,0 +1,1 @@
+kill $(ps aux | grep '[d]fs' | awk '{print $2}')
