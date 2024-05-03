@@ -4,5 +4,8 @@ dfs2/
 dfs3/
 dfs4/
 
+# Ignoring executables
+dfc
+dfs
 # Ignoring specific file
 dfs.dSYM/
