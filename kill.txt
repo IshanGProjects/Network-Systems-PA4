@@ -1,1 +1,2 @@
 kill $(ps aux | grep '[d]fs' | awk '{print $2}')
+ps aux | grep dfs

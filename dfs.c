@@ -9,16 +9,18 @@
 #include <sys/stat.h>
 #include <dirent.h>
 #include <regex.h>
+#include <openssl/md5.h>
 
 #define BUFFER_SIZE 1024
 
 void *handle_client(void *socket_desc);
 void setup_directory(const char *dir);
-void process_put(int sock, char *filename, char *data, int data_size);
+void process_put(int sock, char *filename, char *data, int data_size, int num_servers);
 void process_get(int sock, char *filename);
 void process_list(int sock);
 char *get_full_path(const char *dir, const char *filename);
 
+int num_servers = 4;
 
 int main(int argc, char *argv[]) {
     if (argc != 3) {
@@ -111,7 +113,7 @@ void *handle_client(void *socket_desc) {
             char *filename = strtok(buffer + 4, " ");
             char *data = strtok(NULL, " ");
             int data_size = strlen(data);
-            process_put(sock, filename, data, data_size);
+            process_put(sock, filename, data, data_size, num_servers);
             printf("PUT command processed for file %s\n", filename);
         } else if (strncmp(buffer, "GET", 3) == 0) {
             char *filename = buffer + 4;
@@ -138,17 +140,46 @@ void *handle_client(void *socket_desc) {
     return NULL;
 }
 
-void process_put(int sock, char *filename, char *data, int data_size) {
-    char *full_path = get_full_path("server_directory", filename);
-    FILE *file = fopen(full_path, "wb");
-    if (file != NULL) {
-        fwrite(data, sizeof(char), data_size, file);
-        fclose(file);
-        printf("Data written to file %s successfully.\n", filename);
-    } else {
-        perror("Failed to open file for writing");
+void process_put(int sock, char *filename, char *data, int data_size, int num_servers) {
+    unsigned char hash[MD5_DIGEST_LENGTH];
+    char *full_paths[num_servers];
+    MD5((unsigned char *)filename, strlen(filename), hash);
+    int index = hash[0] % num_servers;  // Simple hash function
+
+    // Determine chunk distribution based on the hash index
+    int chunk_pairs[4][2] = {
+        {0, 1}, {1, 2}, {2, 3}, {3, 0}  // Modifying this according to the table you provided
+    };
+
+    // Assuming file is split into 4 chunks
+    int chunk_size = data_size / 4;
+    for (int i = 0; i < 4; i++) {
+        int server_index = (index + i) % num_servers;
+        int chunk_index1 = chunk_pairs[i][0];
+        int chunk_index2 = chunk_pairs[i][1];
+        char chunk_data1[chunk_size];
+        char chunk_data2[chunk_size];
+
+        memcpy(chunk_data1, data + chunk_index1 * chunk_size, chunk_size);
+        memcpy(chunk_data2, data + chunk_index2 * chunk_size, chunk_size);
+
+        // Construct full path for each chunk
+        char path_buffer[1024];
+        snprintf(path_buffer, sizeof(path_buffer), "server_directory/dfs%d/%s_part%d", server_index + 1, filename, chunk_index1 + 1);
+        full_paths[i] = strdup(path_buffer);
+
+        // Open file and write the chunk
+        FILE *file = fopen(full_paths[i], "wb");
+        if (file != NULL) {
+            fwrite(chunk_data1, sizeof(char), chunk_size, file);
+            fwrite(chunk_data2, sizeof(char), chunk_size, file);
+            fclose(file);
+            printf("Data for chunks %d and %d written to %s successfully.\n", chunk_index1 + 1, chunk_index2 + 1, full_paths[i]);
+        } else {
+            perror("Failed to open file for writing");
+        }
+        free(full_paths[i]);
     }
-    free(full_path);
 }
 
 void process_get(int sock, char *filename) {
