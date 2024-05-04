@@ -113,85 +113,50 @@ void setup_directory(const char *dir) {
     }
 }
 
-// void *handle_client(void *socket_desc) {
-//     int sock = *(int*)socket_desc;
-//     free(socket_desc);  // Free the memory allocated for the socket descriptor
-//     char buffer[BUFFER_SIZE];
-//     int read_size;
-
-//     while ((read_size = recv(sock, buffer, BUFFER_SIZE, 0)) > 0) {
-//         buffer[read_size] = '\0'; // Ensure the buffer is null-terminated
-
-//         char *command = strtok(buffer, " ");
-//         if (command == NULL) continue;
-
-//         // Process commands here based on buffer contents
-//         if (strncmp(buffer, "PUT", 3) == 0) {
-//             printf("coming into process_put command\n");
-//             char *filename = strtok(buffer + 4, " ");
-//             char *data = strtok(NULL, " ");
-//             int data_size = strlen(data);
-//             process_put(sock, filename, data, data_size, num_servers);
-//             printf("PUT command processed for file %s\n", filename);
-//         } else if (strncmp(buffer, "GET", 3) == 0) {
-//             char *filename = buffer + 4;
-//             process_get(sock, filename);
-//             printf("GET command processed for file %s\n", filename);
-//         } else if (strncmp(buffer, "LIST", 4) == 0) {
-//             process_list(sock);
-//             printf("LIST command processed\n");
-//         }
-//         else{
-//             printf("%s", buffer);
-//         }
-
-//         memset(buffer, 0, BUFFER_SIZE);
-//     }
-
-//     if (read_size == 0) {
-//         printf("Client disconnected.\n");
-//     } else if (read_size == -1) {
-//         perror("recv failed");
-//     }
-
-//     close(sock);
-//     return NULL;
-// }
-
 void *handle_client(void *socket_desc) {
     int sock = *(int*)socket_desc;
     free(socket_desc);  // Free the memory allocated for the socket descriptor
     
     char buffer[BUFFER_SIZE];
     int read_size;
-    char *saveptr;  // For strtok_r usage
 
     while ((read_size = recv(sock, buffer, BUFFER_SIZE - 1, 0)) > 0) {
         buffer[read_size] = '\0';  // Ensure the buffer is null-terminated
 
-        char *command = strtok_r(buffer, " ", &saveptr);
-        if (command == NULL) {
+        // Using strstr to locate the command and separate it by finding the first space
+        char *command = strtok(buffer, " ");
+        if (!command) {
             printf("Invalid command format.\n");
             continue;
         }
 
         if (strcmp(command, "PUT") == 0) {
-            char *filename = strtok_r(NULL, " ", &saveptr);
-            char *data = strtok_r(NULL, "", &saveptr);
-            if (filename == NULL || data == NULL) {
-                printf("Invalid or incomplete PUT command.\n");
+            // Extracting the filename by finding the first quote
+            char *filename = strtok(NULL, "\"");
+            if (!filename) {
+                printf("Invalid PUT command: No filename provided.\n");
                 continue;
             }
+
+            // Moving the pointer to the start of the actual data after the filename and the space after the quote
+            char *data = strtok(NULL, "\"");
+            if (!data) {
+                printf("Invalid PUT command: No data found.\n");
+                continue;
+            }
+
             int data_size = strlen(data);
-            printf("coming into process_put command\n");
+            printf("Received PUT command for file %s with data size %d\n", filename, data_size);
             process_put(sock, filename, data, data_size, num_servers);
             printf("PUT command processed for file %s\n", filename);
         } else if (strcmp(command, "GET") == 0) {
-            char *filename = strtok_r(NULL, " ", &saveptr);
-            if (filename != NULL) {
-                process_get(sock, filename);
-                printf("GET command processed for file %s\n", filename);
+            char *filename = strtok(NULL, " ");
+            if (!filename) {
+                printf("Invalid GET command: No filename provided.\n");
+                continue;
             }
+            process_get(sock, filename);
+            printf("GET command processed for file %s\n", filename);
         } else if (strcmp(command, "LIST") == 0) {
             process_list(sock);
             printf("LIST command processed\n");
@@ -212,46 +177,62 @@ void *handle_client(void *socket_desc) {
 
 
 void process_put(int sock, char *filename, char *data, int data_size, int num_servers) {
-    printf("coming into process_put\n");
+    printf("Processing PUT for file: %s\n", filename);
+    printf("Data to be split: %s\n", data);
+    printf("Data size: %d\n", data_size);
     unsigned char hash[MD5_DIGEST_LENGTH];
     MD5((unsigned char *)filename, strlen(filename), hash);
-    int index = hash[0] % num_servers;  // Simple hash function based on MD5
+    int x = hash[0] % num_servers;  // Simple hash function based on MD5
 
-    // Determine chunk distribution based on the hash index
-    int chunk_pairs[4][2] = {{0, 1}, {1, 2}, {2, 3}, {3, 0}};
+    // Define chunk distribution based on the hash index x
+    int server_pairs[4][4][2] = {
+        {{0, 1}, {1, 2}, {2, 3}, {3, 0}},  // x = 0
+        {{3, 0}, {0, 1}, {1, 2}, {2, 3}},  // x = 1
+        {{2, 3}, {3, 0}, {0, 1}, {1, 2}},  // x = 2
+        {{1, 2}, {2, 3}, {3, 0}, {0, 1}}   // x = 3
+    };
+
     int chunk_size = data_size / 4;
-    int last_chunk_size = data_size - (chunk_size * 3);  // Handling remainder
-
+    printf("Chunk size: %d\n", chunk_size);
+    char *chunks[4];
     for (int i = 0; i < 4; i++) {
-        int server_index = (index + i) % num_servers;
-        int chunk_index1 = chunk_pairs[i][0];
-        int chunk_index2 = chunk_pairs[i][1];
-        int size1 = (i < 3) ? chunk_size : last_chunk_size;  // Last chunk can be smaller
-        char chunk_data1[size1];
-        char chunk_data2[chunk_size];  // This size is always correct except for the last chunk
+        chunks[i] = malloc(chunk_size + (i == 3 ? data_size % 4 : 0));  // Allocate for last chunk with remainder
+        memcpy(chunks[i], data + i * chunk_size, chunk_size + (i == 3 ? data_size % 4 : 0));
+    }
 
-        memcpy(chunk_data1, data + chunk_index1 * chunk_size, size1);
-        memcpy(chunk_data2, data + chunk_index2 * chunk_size, chunk_size);
+    // Create directories and write chunks to respective files
+    for (int i = 0; i < 4; i++) {
+        char dir_path[1024];
+        snprintf(dir_path, sizeof(dir_path), "./dfs%d/%s_files", i + 1, filename);
+        mkdir(dir_path, 0777);  // Ensure the directory exists
 
-        // Construct full path for each chunk
-        char path_buffer[1024];
-        snprintf(path_buffer, sizeof(path_buffer), "./dfs%d/%s_part%d",
-                 server_index + 1, filename, chunk_index1 + 1);
-        char *full_path = strdup(path_buffer);
+        int chunk_index1 = server_pairs[x][i][0];
+        int chunk_index2 = server_pairs[x][i][1];
+        char path_buffer1[1024], path_buffer2[1024];
+        snprintf(path_buffer1, sizeof(path_buffer1), "%s/part%d", dir_path, chunk_index1 + 1);
+        snprintf(path_buffer2, sizeof(path_buffer2), "%s/part%d", dir_path, chunk_index2 + 1);
 
-        // Open file and write the chunk
-        FILE *file = fopen(full_path, "wb");
-        if (file != NULL) {
-            fwrite(chunk_data1, sizeof(char), size1, file);
-            fwrite(chunk_data2, sizeof(char), chunk_size, file);
-            fclose(file);
-            printf("Data for chunks %d and %d written to %s successfully.\n", chunk_index1 + 1, chunk_index2 + 1, full_path);
+        FILE *file1 = fopen(path_buffer1, "wb");
+        FILE *file2 = fopen(path_buffer2, "wb");
+        if (file1 && file2) {
+            fwrite(chunks[chunk_index1], sizeof(char), chunk_size, file1);
+            fwrite(chunks[chunk_index2], sizeof(char), chunk_size, file2);
+            fclose(file1);
+            fclose(file2);
+            printf("Chunks %d and %d written to %s and %s successfully.\n", chunk_index1 + 1, chunk_index2 + 1, path_buffer1, path_buffer2);
         } else {
             perror("Failed to open file for writing");
         }
-        free(full_path);
+    }
+
+    // Free allocated memory for chunks
+    for (int i = 0; i < 4; i++) {
+        free(chunks[i]);
     }
 }
+
+
+
 
 void process_get(int sock, char *filename) {
     char *full_path = get_full_path("server_directory", filename);

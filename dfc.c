@@ -86,6 +86,32 @@ void send_command(int sock, const char *cmd, const char *data) {
     }
 }
 
+// void execute_put_command(int sock, const char *filename) {
+//     FILE *file = fopen(filename, "rb");
+//     if (!file) {
+//         perror("Failed to open file");
+//         return;
+//     }
+
+//     fseek(file, 0, SEEK_END);
+//     long fsize = ftell(file);
+//     fseek(file, 0, SEEK_SET);  //same as rewind(file);
+
+//     char *string = malloc(fsize + 1);
+//     if (!string) {
+//         perror("Memory allocation failed");
+//         fclose(file);
+//         return;
+//     }
+//     fread(string, 1, fsize, file);
+//     fclose(file);
+
+//     string[fsize] = 0;
+
+//     send_command(sock, "PUT", string);
+//     free(string);
+// }
+
 void execute_put_command(int sock, const char *filename) {
     FILE *file = fopen(filename, "rb");
     if (!file) {
@@ -95,21 +121,33 @@ void execute_put_command(int sock, const char *filename) {
 
     fseek(file, 0, SEEK_END);
     long fsize = ftell(file);
-    fseek(file, 0, SEEK_SET);  //same as rewind(file);
+    fseek(file, 0, SEEK_SET);
 
-    char *string = malloc(fsize + 1);
-    if (!string) {
+    char *data = malloc(fsize + 1);
+    if (!data) {
         perror("Memory allocation failed");
         fclose(file);
         return;
     }
-    fread(string, 1, fsize, file);
+    fread(data, 1, fsize, file);
     fclose(file);
+    data[fsize] = '\0'; // Ensure string is null-terminated
 
-    string[fsize] = 0;
+    // Construct the command with the data enclosed in quotes
+    char *command = malloc(strlen(filename) + strlen(data) + 50);
+    if (!command) {
+        perror("Memory allocation failed for command");
+        free(data);
+        return;
+    }
+    sprintf(command, "PUT %s \"%s\"", filename, data);
+    printf("Command: %s\n", command);
+    if (send(sock, command, strlen(command), 0) < 0) {
+        puts("Send failed");
+    }
 
-    send_command(sock, "PUT", string);
-    free(string);
+    free(command);
+    free(data);
 }
 
 void receive_data(int sock) {
@@ -123,25 +161,6 @@ void receive_data(int sock) {
     puts("");
 }
 
-// void execute_command(const char *cmd, char *filename) {
-//     for (int i = 0; i < serverCount; i++) {
-//         int sock = connect_to_server(serverConfigs[i].ip, serverConfigs[i].port);
-//         if (sock < 0) {
-//             printf("Failed to connect to server %d\n", i + 1);
-//             continue;
-//         }
-
-//         char full_command[BUFFER_SIZE];
-//         sprintf(full_command, "%s %s", cmd, filename ? filename : "");
-//         sleep(1); // Sleep for a second
-//         send_command(sock, full_command);
-//         printf("Command '%s' sent to server %d\n", cmd, i + 1);
-//         receive_data(sock);
-//         close(sock);
-//         printf("Connection to server %d closed\n", i + 1);
-//     }
-// }
-
 void execute_command(const char *cmd, char *filename) {
     for (int i = 0; i < serverCount; i++) {
         int sock = connect_to_server(serverConfigs[i].ip, serverConfigs[i].port);
@@ -152,7 +171,7 @@ void execute_command(const char *cmd, char *filename) {
 
         if (strcmp(cmd, "PUT") == 0 && filename != NULL) {
             execute_put_command(sock, filename);
-        } else {
+        }else {
             send_command(sock, cmd, NULL);
         }
 
