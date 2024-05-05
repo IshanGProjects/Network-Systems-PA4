@@ -12,6 +12,8 @@
 #include <openssl/md5.h>
 
 #define BUFFER_SIZE 1024
+#define MAX_FILENAME 255
+#define COMMAND_SIZE 10
 
 void *handle_client(void *socket_desc);
 void setup_directory(const char *dir);
@@ -21,6 +23,14 @@ void process_list(int sock);
 char *get_full_path(const char *dir, const char *filename);
 
 int num_servers = 4;
+
+//Packet Structure
+typedef struct {
+    char command[COMMAND_SIZE];
+    char filename[MAX_FILENAME];
+    char data[BUFFER_SIZE];
+    int data_size; // To handle partial writes
+} Packet;
 
 int main(int argc, char *argv[]) {
     if (argc != 3) {
@@ -113,67 +123,242 @@ void setup_directory(const char *dir) {
     }
 }
 
+// void *handle_client(void *socket_desc) {
+//     int sock = *(int*)socket_desc;
+//     free(socket_desc);  // Free the memory allocated for the socket descriptor
+    
+//     char buffer[BUFFER_SIZE];
+//     int read_size;
+
+//     int in_data_section = 0; //Flag to track if we're inside the data section of a command
+//     int PUT_inProgress = 0; //Flag to track if we're in the middle of a PUT command
+
+//     FILE *file = NULL;
+
+//     while ((read_size = recv(sock, buffer, BUFFER_SIZE - 1, 0)) > 0) {
+//         buffer[read_size] = '\0';  // Ensure the buffer is null-terminated
+
+//         if(!in_data_section) {
+//             // Using strstr to locate the command and separate it by finding the first space
+//             char *command = strtok(buffer, " ");
+//             if (!command) {
+//                 printf("Invalid command format.\n");
+//                 continue;
+//             }
+
+//             if (strcmp(command, "PUT") == 0 || PUT_inProgress == 1) {
+//                 if(!PUT_inProgress) {
+//                     PUT_inProgress = 1;
+//                 }
+//                 // Extracting the filename by finding the first quote
+//                 char *filename = strtok(NULL, "\"");
+//                 if (!filename) {
+//                     printf("Invalid PUT command: No filename provided.\n");
+//                     continue;
+//                 }
+
+//                 printf("Received PUT command for file %s\n", filename);
+//                 char *data_start = strchr(buffer + strlen(command) + strlen(filename) + 3, '"');
+//                 printf("Data start: %s\n", data_start);
+//                 if(data_start){
+//                     data_start++;
+//                     file = fopen(filename, "wb");
+//                     if(!file){
+//                         perror("Failed to open file for writing");
+//                         return NULL;
+//                     }
+//                 }
+//                 in_data_section = 1;
+
+//                 //Write the first part of the data after the command
+//                 if(data_start != '"') { // check if its not an immediate end quote
+//                     char *data_end = strchr(data_start, '"');
+//                     if(data_end) *data_end = '\0'; // Null terminate the data
+//                     fwrite(data_start, 1, strlen(data_start), file);
+//                     if(data_end) break; //if data ends in the same chunk
+//                 }
+
+//                 // // Moving the pointer to the start of the actual data after the filename and the space after the quote
+//                 // char *data = strtok(NULL, "\"");
+//                 // if (!data) {
+//                 //     printf("Invalid PUT command: No data found.\n");
+//                 //     continue;
+//                 // }
+
+//                 // int data_size = strlen(data);
+//                 // printf("Received PUT command for file %s with data size %d\n", filename, data_size);
+//                 //process_put(sock, filename, data, data_size, num_servers);
+//                 // printf("PUT command processed for file %s\n", filename);
+//             } else if (strcmp(command, "GET") == 0) {
+//                 char *filename = strtok(NULL, " ");
+//                 if (!filename) {
+//                     printf("Invalid GET command: No filename provided.\n");
+//                     continue;
+//                 }
+//                 process_get(sock, filename);
+//                 printf("GET command processed for file %s\n", filename);
+//             } else if (strcmp(command, "LIST") == 0) {
+//                 process_list(sock);
+//                 printf("LIST command processed\n");
+//             } else {
+//                 printf("Received unknown command: %s\n", buffer);
+//             }
+//         }else{
+//             //we are in the data section
+//             printf("We are in the data section.\n");
+//             char *data_end = strchr(buffer, '"');
+//             if(data_end){
+//                 *data_end = '\0'; // Null terminate the data
+//                 fwrite(buffer, 1, strlen(buffer), file);
+//                 fclose(file);
+//                 file = NULL;
+//                 in_data_section = 0;
+//                 PUT_inProgress = 0;
+//                 printf("Data section ended.\n");
+//                 break;
+//             }else{
+//                 fwrite(buffer, 1, read_size, file);
+//             }
+//         }
+//     }
+
+//     if (file) {
+//         fclose(file); //Ensure the file is closed if we're still writing to it
+//     }
+
+//     if (read_size == 0) {
+//         printf("Client disconnected.\n");
+//     } else if (read_size == -1) {
+//         perror("recv failed");
+//     }
+
+//     close(sock);
+//     return NULL;
+// }
+
+// void * handle_client(void *socket_desc){
+//     int sock = *(int*)socket_desc;
+//     free(socket_desc);  // Free the memory allocated for the socket descriptor
+
+//     char buffer[BUFFER_SIZE + 1];
+//     int read_size;
+//     int expecting_data = 0;
+//     FILE *file = NULL;
+//     char *filename[1024] = {0}; // Buffer to store the filename
+//     char command[50]; // Buffer to store the command
+
+//     memset(buffer, 0, BUFFER_SIZE + 1);
+//     while ((read_size = recv(sock, buffer, BUFFER_SIZE, 0)) > 0) {
+//         buffer[read_size] = '\0'; // Ensure the buffer is null-terminated
+//         printf("Received:%s\n", buffer);
+
+//         //check if we are still expecting to read data
+//         if(expecting_data){
+//             char *data_end = strchr(buffer, '\"');
+//             if(data_end){
+//                 *data_end = '\0'; // Null terminate the data
+//                 expecting_data = 0;
+//             }
+
+//             //Write Buffer to the file until the end of the data segment
+//             if(file){
+//                 fwrite(buffer, 1, strlen(buffer), file);
+//                 if(!expecting_data){
+//                     fclose(file);
+//                     file = NULL;
+//                     printf("File %s received successfully\n", filename);
+//                 }
+//             }
+//         }
+
+//         //Not Curreently processing a file so check for commands
+        
+//         if (sscanf(buffer, "%49s", command) == 1) {
+//             if(strncmp(command, "PUT", 3) == 0){
+//                 printf("Command: %s\n", command);
+//                 //Extract the filename            
+//                 char * file_part = strtok(NULL, "\"");
+//                 if(file_part){
+//                     strcpy(filename, file_part);
+//                     char *data_start = strchr(buffer, '\"');
+//                     if(data_start){
+//                         data_start++;
+//                         char *data_end = strchr(data_start, '\"');
+//                         if(data_end) {
+//                             *data_end = '\0'; // Null terminate the data
+//                             expecting_data = 0;
+//                             printf("In Data end\n");
+//                         }
+//                         else{
+//                             expecting_data = 1; // didn't find the end of the data expect more data
+//                         }
+
+//                         //Open the file for writing
+//                         file = fopen(filename, "wb");
+//                         printf("Stuck Outside\n");
+//                         if(file){
+//                         printf("Stuck Inside\n");
+//                             fwrite(data_start, 1, strlen(data_start), file);
+//                             if(!expecting_data){
+//                                 fclose(file);
+//                                 file = NULL;
+//                                 printf("File %s received successfully\n", filename);
+//                             }
+//                         }
+//                         else{
+//                             perror("Failed to open file for writing");
+//                         }
+//                     }
+//                 }
+//             }
+//         }else{
+//             printf("Command: %s\n", command);
+//             perror("Recieved unknown or incomplete command");
+//         }
+//         // After processing, clear the buffer for the next loop iteration
+//         memset(buffer, 0, BUFFER_SIZE + 1);
+//     }
+// }
+
 void *handle_client(void *socket_desc) {
     int sock = *(int*)socket_desc;
-    free(socket_desc);  // Free the memory allocated for the socket descriptor
-    
-    char buffer[BUFFER_SIZE];
-    int read_size;
+    free(socket_desc);
 
-    while ((read_size = recv(sock, buffer, BUFFER_SIZE - 1, 0)) > 0) {
-        buffer[read_size] = '\0';  // Ensure the buffer is null-terminated
+    Packet packet;
+    FILE *file = NULL;
 
-        // Using strstr to locate the command and separate it by finding the first space
-        char *command = strtok(buffer, " ");
-        if (!command) {
-            printf("Invalid command format.\n");
-            continue;
+    while (recv(sock, &packet, sizeof(Packet), 0) > 0) {
+        printf("received data: %s\n", packet.data);
+        if (strcmp(packet.command, "PUT") == 0) {
+            printf("Packet Command: %s\n", packet.command);
+            if (!file) {  // Open file on first packet
+                printf("Opening file: %s\n", packet.filename);
+                file = fopen(packet.filename, "wb");
+                if (!file) {
+                    perror("Failed to open file");
+                    continue;
+                }
+            }
+            printf("received data: %s\n", packet.data);
+            if (strcmp(packet.data, "EOF") == 0) {  // Check for EOF
+                fclose(file);
+                file = NULL;
+                printf("File received and closed successfully.\n");
+            } else {
+                printf("Writing data to file: %s\n", packet.data);
+                fwrite(packet.data, 1, packet.data_size, file);  // Write data to file
+            }
         }
-
-        if (strcmp(command, "PUT") == 0) {
-            // Extracting the filename by finding the first quote
-            char *filename = strtok(NULL, "\"");
-            if (!filename) {
-                printf("Invalid PUT command: No filename provided.\n");
-                continue;
-            }
-
-            // Moving the pointer to the start of the actual data after the filename and the space after the quote
-            char *data = strtok(NULL, "\"");
-            if (!data) {
-                printf("Invalid PUT command: No data found.\n");
-                continue;
-            }
-
-            int data_size = strlen(data);
-            printf("Received PUT command for file %s with data size %d\n", filename, data_size);
-            process_put(sock, filename, data, data_size, num_servers);
-            printf("PUT command processed for file %s\n", filename);
-        } else if (strcmp(command, "GET") == 0) {
-            char *filename = strtok(NULL, " ");
-            if (!filename) {
-                printf("Invalid GET command: No filename provided.\n");
-                continue;
-            }
-            process_get(sock, filename);
-            printf("GET command processed for file %s\n", filename);
-        } else if (strcmp(command, "LIST") == 0) {
-            process_list(sock);
-            printf("LIST command processed\n");
-        } else {
-            printf("Received unknown command: %s\n", buffer);
-        }
+        memset(packet.data, 0, BUFFER_SIZE);  // Ensure buffer is clear before setting EO
     }
 
-    if (read_size == 0) {
-        printf("Client disconnected.\n");
-    } else if (read_size == -1) {
-        perror("recv failed");
-    }
-
+    if (file) fclose(file);  // Close file if open
     close(sock);
+
     return NULL;
 }
+
+
 
 
 void process_put(int sock, char *filename, char *data, int data_size, int num_servers) {

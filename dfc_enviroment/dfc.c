@@ -6,14 +6,24 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <pthread.h>
+#include <netinet/tcp.h>  // Include this header for TCP_NODELAY
 
 #define BUFFER_SIZE 1024
+#define MAX_FILENAME 255
+#define COMMAND_SIZE 10
 #define MAX_SERVERS 10
 
 typedef struct {
     char ip[50];
     int port;
 } ServerConfig;
+
+typedef struct {
+    char command[COMMAND_SIZE];
+    char filename[MAX_FILENAME];
+    char data[BUFFER_SIZE];
+    int data_size; // To handle partial writes
+} Packet;
 
 ServerConfig serverConfigs[MAX_SERVERS];
 int serverCount = 0;
@@ -43,6 +53,15 @@ int connect_to_server(char *ip, int port) {
     sock = socket(AF_INET, SOCK_STREAM, 0);
     if (sock == -1) {
         printf("Could not create socket");
+        return -1;
+    }
+
+    // Disable Nagle's Algorithm
+    int flag = 1;
+    int result = setsockopt(sock, IPPROTO_TCP, TCP_NODELAY, (char *)&flag, sizeof(int));
+    if (result < 0) {
+        perror("setsockopt(TCP_NODELAY) failed");
+        close(sock);
         return -1;
     }
 
@@ -95,21 +114,60 @@ void send_command(int sock, const char *cmd, const char *data) {
 
 //     fseek(file, 0, SEEK_END);
 //     long fsize = ftell(file);
-//     fseek(file, 0, SEEK_SET);  //same as rewind(file);
+//     fseek(file, 0, SEEK_SET);
 
-//     char *string = malloc(fsize + 1);
-//     if (!string) {
+//     char *data = malloc(fsize + 1);
+//     if (!data) {
 //         perror("Memory allocation failed");
 //         fclose(file);
 //         return;
 //     }
-//     fread(string, 1, fsize, file);
+//     fread(data, 1, fsize, file);
 //     fclose(file);
+//     data[fsize] = '\0'; // Ensure string is null-terminated
 
-//     string[fsize] = 0;
+//     // Construct the command with the data enclosed in quotes
+//     char *command = malloc(strlen(filename) + strlen(data) + 50);
+//     if (!command) {
+//         perror("Memory allocation failed for command");
+//         free(data);
+//         return;
+//     }
+//     sprintf(command, "PUT %s \"%s\"", filename, data);
+//     printf("Command: %s\n", command);
+//     if (send(sock, command, strlen(command), 0) < 0) {
+//         puts("Send failed");
+//     }
 
-//     send_command(sock, "PUT", string);
-//     free(string);
+//     free(command);
+//     free(data);
+// }
+
+// void execute_put_command(int sock, const char *filename) {
+//     FILE *file = fopen(filename, "rb");
+//     if (!file) {
+//         perror("Failed to open file");
+//         return;
+//     }
+
+//     // Send initial command with filename
+//     char init_command[1024];
+//     sprintf(init_command, "PUT %s \"", filename);  // Start of data indicated by a quote
+//     printf("Command: %s\n", init_command);
+//     send(sock, init_command, strlen(init_command), 0);
+
+//     char buffer[BUFFER_SIZE];
+//     size_t bytes_read;
+//     while ((bytes_read = fread(buffer, 1, BUFFER_SIZE, file)) > 0) {
+//         send(sock, buffer, bytes_read, 0);
+//     }
+
+//     // Send ending quote to indicate the end of data
+//     char end_quote[2] = "\"";
+//     printf("End of data: %s\n", end_quote);
+//     send(sock, end_quote, 1, 0);
+
+//     fclose(file);
 // }
 
 void execute_put_command(int sock, const char *filename) {
@@ -119,36 +177,36 @@ void execute_put_command(int sock, const char *filename) {
         return;
     }
 
-    fseek(file, 0, SEEK_END);
-    long fsize = ftell(file);
-    fseek(file, 0, SEEK_SET);
+    Packet packet;
+    size_t bytes_read;
 
-    char *data = malloc(fsize + 1);
-    if (!data) {
-        perror("Memory allocation failed");
-        fclose(file);
-        return;
+    memset(&packet, 0, sizeof(Packet));
+
+    // Prepare the packet for the PUT command
+    strcpy(packet.command, "PUT");
+    strncpy(packet.filename, filename, MAX_FILENAME);
+
+    while ((bytes_read = fread(packet.data, 1, BUFFER_SIZE, file)) > 0) {
+        packet.data_size = bytes_read; // Set the data_size field
+        if (send(sock, &packet, sizeof(Packet), 0) < 0) {
+            perror("Send failed");
+            break;
+        }
+        memset(packet.data, 0, BUFFER_SIZE);  // Ensure buffer is clear before setting EO
     }
-    fread(data, 1, fsize, file);
+    printf("End of data\n");
+    memset(packet.data, 0, BUFFER_SIZE);  // Ensure buffer is clear before setting EO
+    printf("Data at the Supposed end of data: %s\n", packet.data);
+    // Indicate the end of data transfer
+    strcpy(packet.data, "EOF"); // Use any unique sequence to indicate EOF
+    packet.data_size = strlen(packet.data); // Set the data_size field
+    printf("Data now sending EOF: %s\n", packet.data);
+    send(sock, &packet, sizeof(Packet), 0); // Send the complete packet
+
     fclose(file);
-    data[fsize] = '\0'; // Ensure string is null-terminated
-
-    // Construct the command with the data enclosed in quotes
-    char *command = malloc(strlen(filename) + strlen(data) + 50);
-    if (!command) {
-        perror("Memory allocation failed for command");
-        free(data);
-        return;
-    }
-    sprintf(command, "PUT %s \"%s\"", filename, data);
-    printf("Command: %s\n", command);
-    if (send(sock, command, strlen(command), 0) < 0) {
-        puts("Send failed");
-    }
-
-    free(command);
-    free(data);
 }
+
+
 
 void receive_data(int sock) {
     char server_reply[BUFFER_SIZE];
@@ -170,8 +228,10 @@ void execute_command(const char *cmd, char *filename) {
         }
 
         if (strcmp(cmd, "PUT") == 0 && filename != NULL) {
+            printf("Executing PUT command\n");
             execute_put_command(sock, filename);
         }else {
+            printf("Executing other command\n");
             send_command(sock, cmd, NULL);
         }
 
