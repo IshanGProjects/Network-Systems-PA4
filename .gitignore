@@ -9,3 +9,6 @@ dfc
 dfs
 # Ignoring specific file
 dfs.dSYM/
+
+dfc_enviroment/dcs
+dfc_enviroment/dfc.dSYM/

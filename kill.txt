@@ -6,4 +6,5 @@ ps aux | grep dfs
 ./dfs ./dfs3 10003 &
 ./dfs ./dfs4 10004 &
 gcc -fsanitize=address -g  dfs.c -o dfs -I/opt/homebrew/opt/openssl@3/include -L/opt/homebrew/opt/openssl@3/lib -lpthread -lssl -lcrypto
+gcc -fsanitize=address -g  dfc.c -o dfc -I/opt/homebrew/opt/openssl@3/include -L/opt/homebrew/opt/openssl@3/lib -lpthread -lssl -lcrypto
 ./dfc PUT test.txt
