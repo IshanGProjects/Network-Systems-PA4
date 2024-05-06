@@ -14,15 +14,16 @@
 #define BUFFER_SIZE 1024
 #define MAX_FILENAME 255
 #define COMMAND_SIZE 10
+#define NUM_SERVERS 4
 
 void *handle_client(void *socket_desc);
 void setup_directory(const char *dir);
 void process_put(int sock, char *filename, char *data, int data_size, int num_servers);
-void process_get(int sock, char *filename);
+void process_get(int sock, int chunk_index, int server_index, char *filename);
 void process_list(int sock);
 char *get_full_path(const char *dir, const char *filename);
 
-int num_servers = 4;
+
 
 //Packet Structure
 typedef struct {
@@ -33,6 +34,14 @@ typedef struct {
     int chunk_indexF;
     int server_indexF;
 } Packet;
+
+#define MAX_FILES 100
+
+typedef struct {
+    char filenames[MAX_FILES][FILENAME_MAX]; // Array to hold filenames
+    int count; // Number of filenames
+} FileList;
+
 
 int main(int argc, char *argv[]) {
     if (argc != 3) {
@@ -160,6 +169,12 @@ void *handle_client(void *socket_desc) {
             }
 
         }
+        if (strcmp(packet.command, "GET") == 0) {
+            process_get(sock, packet.chunk_indexF, packet.server_indexF, packet.filename);
+        }
+        if(strcmp(packet.command, "LIST") == 0){
+            process_list(sock);
+        }
         memset(packet.data, 0, BUFFER_SIZE);  // Ensure buffer is clear before setting EO
     }
 
@@ -169,21 +184,69 @@ void *handle_client(void *socket_desc) {
     return NULL;
 }
 
-void process_get(int sock, char *filename) {
-    char *full_path = get_full_path("server_directory", filename);
-    FILE *file = fopen(full_path, "rb");
-    if (file != NULL) {
-        char data[BUFFER_SIZE];
-        size_t bytes_read;
-        while ((bytes_read = fread(data, sizeof(char), BUFFER_SIZE, file)) > 0) {
-            send(sock, data, bytes_read, 0);
-        }
-        fclose(file);
-        printf("File %s sent successfully.\n", filename);
-    } else {
-        perror("Failed to open file for reading");
+void process_get(int sock,int chunk_index, int server_index, char *filename){
+    // Reminder chunk_index and server_index are 1-indexed thus they already had 1 added
+    char dir_path[1024];
+    snprintf(dir_path, sizeof(dir_path), "./dfs%d", server_index);
+    char file_path[1024];
+    snprintf(file_path, sizeof(file_path), "%s/%s_%d", dir_path, filename, chunk_index);
+
+    char file_on_server_name[1024];
+    snprintf(file_on_server_name,sizeof(file_on_server_name), "%s_%d", filename, chunk_index);
+
+    printf("File on server: %s\n", file_on_server_name);
+    printf ("sock: %d\n", sock);
+
+    // Open file for reading
+    FILE *file = fopen(file_path, "rb");
+    if (!file) {
+        perror("Failed to open file");
+        return;
     }
-    free(full_path);
+
+    //Calculate the file size
+    fseek(file, 0, SEEK_END);
+    long file_size = ftell(file);
+    printf("File Size: %ld\n", file_size);
+    fseek(file, 0, SEEK_SET);
+
+    int bufferToUse = BUFFER_SIZE;
+    if(file_size < BUFFER_SIZE){
+        bufferToUse = file_size;
+    }
+
+    //Create Packet
+    Packet packet;
+    memset(&packet, 0, sizeof(Packet));
+    sprintf(packet.command,"%s","GET");
+    sprintf(packet.filename,"%s",file_on_server_name);
+    packet.chunk_indexF = chunk_index;
+    packet.server_indexF = server_index;
+    
+    int current_bytes_read = 0;
+    while(current_bytes_read < file_size){
+        int bytes_read = 0;
+        bytes_read = fread(packet.data, 1, bufferToUse, file);
+        printf("Packet Data: %s\n", packet.data);
+        if(bytes_read <= 0){
+            break;
+        }
+        current_bytes_read += bytes_read;
+        packet.data_size = bytes_read;
+        send(sock, &packet, sizeof(Packet), 0);
+    }
+    
+    // Indicate the end of data transfer
+    Packet eofc_packet;
+    memset(&eofc_packet, 0, sizeof(Packet));
+    memset(eofc_packet.data, 0, BUFFER_SIZE);  // Ensure buffer is clear before setting EO
+    sprintf(eofc_packet.command, "%s", "PUT");
+    sprintf(eofc_packet.filename, "%s", filename);
+    sprintf(eofc_packet.data, "%s", "EOF");
+    eofc_packet.chunk_indexF = chunk_index + 1;
+    eofc_packet.server_indexF = server_index + 1;
+    eofc_packet.data_size = strlen("EOF");
+    send(sock, &eofc_packet, sizeof(Packet), 0);
 }
 
 

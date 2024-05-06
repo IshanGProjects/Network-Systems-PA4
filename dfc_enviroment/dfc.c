@@ -13,6 +13,7 @@
 #define MAX_FILENAME 255
 #define COMMAND_SIZE 10
 #define NUM_SERVERS 4
+#define NUM_PARTS 4
 
 typedef struct {
     char ip[50];
@@ -28,6 +29,17 @@ typedef struct {
     int server_indexF;
 } Packet;
 
+#define MAX_FILES 100
+
+typedef struct {
+    char filename[MAX_FILENAME];
+    int parts[NUM_PARTS]; // Array to hold the number of parts for each file
+} FileTracker;
+
+FileTracker fileTrackers[MAX_FILES];
+int fileCount = 0;
+
+
 ServerConfig serverConfigs[NUM_SERVERS];
 int serverCount = 0;
 
@@ -35,7 +47,12 @@ int send_to_server_put(int server_index, Packet);
 void read_config(const char *filename);
 int connect_to_server(char *ip, int port);
 int send_to_server_put(int server_index, Packet packet);
-void execute_put_command(const char *filename);  
+void execute_command(const char *cmd, char *filename);
+void execute_put_command(const char *filename); 
+void execute_get_command(const char *filename); 
+void receive_data(int i);
+void add_chunk(const char *chunnk);
+void check_completness(void);
 
 void read_config(const char *filename) {
     FILE *file = fopen(filename, "r");
@@ -121,7 +138,7 @@ void execute_put_command(const char *filename) {
     printf("Hash Pattern(X Value): %d\n", x);
 
     // Define chunk distribution based on the hash index x
-     int server_pairs[4][4][2] = {
+    int server_pairs[4][4][2] = {
         {{0, 1}, {1, 2}, {2, 3}, {3, 0}},  // x = 0
         {{3, 0}, {0, 1}, {1, 2}, {2, 3}},  // x = 1
         {{2, 3}, {3, 0}, {0, 1}, {1, 2}},  // x = 2
@@ -191,22 +208,177 @@ void execute_put_command(const char *filename) {
     fclose(file);
 }
 
-void receive_data(int sock) {
-    char server_reply[BUFFER_SIZE];
+void receive_data(int i) {
+    int sock = connect_to_server(serverConfigs[i].ip, serverConfigs[i].port);
+    printf("Receiving data...\n");
     // Receive a reply from the server
-    while(1) {
-        int len = recv(sock, server_reply , BUFFER_SIZE , 0);
-        if(len <= 0) break;
-        fwrite(server_reply, len, 1, stdout);
+    Packet packet;
+    memset(&packet, 0, sizeof(Packet));
+    while (recv(sock, &packet, sizeof(Packet), 0) > 0)
+    {
+        if (strcmp(packet.data, "EOF") == 0) {
+            printf("End of file reached\n");
+            break;
+        }
+        printf("Received data: %s\n", packet.data);
+        memset(packet.data, 0, sizeof(packet.data));
+        
     }
     puts("");
 }
+
+void execute_get_command(const char *filename) {
+    //Calculate Hash To Figure out Distribution Pattern
+    unsigned char hash[MD5_DIGEST_LENGTH];
+    MD5((unsigned char*)filename, strlen(filename), hash);
+    int x = hash[0] % NUM_SERVERS;
+    printf("Hash Pattern(X Value): %d\n", x);
+
+    // Define chunk distribution based on the hash index x
+    int server_pairs[4][4][2] = {
+        {{0, 1}, {1, 2}, {2, 3}, {3, 0}},  // x = 0
+        {{3, 0}, {0, 1}, {1, 2}, {2, 3}},  // x = 1
+        {{2, 3}, {3, 0}, {0, 1}, {1, 2}},  // x = 2
+        {{1, 2}, {2, 3}, {3, 0}, {0, 1}}   // x = 3
+    };
+
+
+    //Make a command packet to send to the server
+    for(int i = 0; i < NUM_SERVERS; i++){
+        for(int j = 0; j < 2; j++){
+            //Calculate Chunk Index
+            int chunk_index = server_pairs[x][i][j];
+            //Create Packet
+            Packet packet;
+            memset(&packet, 0, sizeof(Packet));
+            sprintf(packet.command, "%s", "GET");
+            sprintf(packet.filename, "%s", filename);
+            packet.chunk_indexF = chunk_index + 1;
+            packet.server_indexF = i + 1;
+            //Send the packet
+            send_to_server_put(i, packet);
+            memset(packet.data, 0, sizeof(packet.data));
+
+            // Receive the data
+            
+            receive_data(i);
+        }
+    }
+}
+
+void add_chunk(const char *chunk) {
+    char file[100];
+    int part;
+    sscanf(chunk, "%[^_]_%d", file, &part);  // Parse the filename and part number
+    printf("File: %s, Part: %d\n", file, part);
+
+    // Check if this file is already tracked
+    for (int i = 0; i < fileCount; i++) {
+        if (strcmp(fileTrackers[i].filename, file) == 0) {
+            fileTrackers[i].parts[part - 1] = 1;  // Mark this part as received
+            return;
+        }
+    }
+
+    // New file, add to trackers
+    if (fileCount < MAX_FILES) {
+        strcpy(fileTrackers[fileCount].filename, file);
+        memset(fileTrackers[fileCount].parts, 0, sizeof(fileTrackers[fileCount].parts));
+        fileTrackers[fileCount].parts[part - 1] = 1;
+        fileCount++;
+    }
+}
+
+void check_completeness() {
+    printf("Checking completeness...\n");
+    printf("------------------------\n");
+    for (int i = 0; i < fileCount; i++) {
+        int complete = 1;
+        for (int j = 0; j < NUM_PARTS; j++) {
+            if (fileTrackers[i].parts[j] == 0) {
+                complete = 0;
+                break;
+            }
+        }
+
+        if (complete) {
+            printf("%s: COMPLETE\n", fileTrackers[i].filename);
+        } else {
+            printf("%s: INCOMPLETE\n", fileTrackers[i].filename);
+        }
+    }
+}
+
+void execute_list_command() {
+    int sock = connect_to_server(serverConfigs[0].ip, serverConfigs[0].port);
+    if (sock < 0) {
+        perror("Error connecting to server");
+        return;
+    }
+
+    Packet packet;
+    memset(&packet, 0, sizeof(Packet));
+    sprintf(packet.command, "LIST");
+    if (send(sock, &packet, sizeof(Packet), 0) < 0) {
+        perror("Failed to send LIST command");
+        close(sock);
+        return;
+    }
+
+    char buffer[BUFFER_SIZE];
+    int total_bytes_received = 0;
+    while(1) {
+        int bytes_received = recv(sock, buffer + total_bytes_received, BUFFER_SIZE - total_bytes_received, 0);
+        if (bytes_received <= 0) {
+            if (bytes_received == 0) {
+                printf("Server closed the connection.\n");
+            } else {
+                perror("Recv failed");
+            }
+            break;
+        }
+        total_bytes_received += bytes_received;
+        buffer[total_bytes_received] = '\0'; // Ensure null-termination
+
+        // Check for newline character indicating end of a chunk
+        char *newline_pos;
+        while ((newline_pos = strchr(buffer, '\n')) != NULL) {
+            *newline_pos = '\0'; // Replace newline with null to end string
+            printf("Received chunk: %s\n", buffer);
+            add_chunk(buffer);
+            // Move remaining data to the beginning of the buffer
+            int remaining_data = total_bytes_received - (newline_pos - buffer + 1);
+            memmove(buffer, newline_pos + 1, remaining_data);
+            total_bytes_received = remaining_data;
+            buffer[total_bytes_received] = '\0';
+        }
+
+        // Handle buffer overflow condition
+        if (total_bytes_received >= BUFFER_SIZE - 1) {
+            printf("Buffer overflow risk, resetting buffer.\n");
+            total_bytes_received = 0; // Reset buffer if it's too full
+        }
+        check_completeness();
+    }
+
+    close(sock);
+
+}
+
 
 void execute_command(const char *cmd, char *filename) {
     for (int i = 0; i < serverCount; i++) {
         if (strcmp(cmd, "PUT") == 0 && filename != NULL) {
             printf("Executing PUT command\n");
             execute_put_command(filename);
+        }
+        if(strcmp(cmd, "GET") == 0 && filename != NULL) {
+            printf("Executing GET command\n");
+            execute_get_command(filename);
+        }
+        if(strcmp(cmd, "LIST") == 0) {
+            printf("Executing LIST command\n");
+            execute_list_command();
         }
     }
 }
