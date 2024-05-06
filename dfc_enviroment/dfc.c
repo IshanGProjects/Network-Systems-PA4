@@ -9,7 +9,7 @@
 #include <netinet/tcp.h>  // Include this header for TCP_NODELAY
 #include <openssl/md5.h>
 
-#define BUFFER_SIZE 1024
+#define BUFFER_SIZE 100050
 #define MAX_FILENAME 255
 #define COMMAND_SIZE 10
 #define NUM_SERVERS 4
@@ -128,6 +128,7 @@ void execute_put_command(const char *filename) {
     //Calculate the file size
     fseek(file, 0, SEEK_END);
     long file_size = ftell(file);
+    printf("File Size: %ld\n", file_size);
     fseek(file, 0, SEEK_SET);
     int chunk_size = file_size / NUM_SERVERS;
     int last_chunk_size = chunk_size + (file_size % NUM_SERVERS);
@@ -317,6 +318,11 @@ void execute_get_command(const char *filename) {
         }
         fclose(final_file);
         printf("File %s has been reconstructed\n", filename);
+            //Calculate the file size
+        fseek(final_file, 0, SEEK_END);
+        long file_size = ftell(final_file);
+        printf("File Size: %ld\n", file_size);
+        fseek(final_file, 0, SEEK_SET);
     }
     else if(fourPartsCounter != 4){
         printf("%s is incomplete\n", filename);

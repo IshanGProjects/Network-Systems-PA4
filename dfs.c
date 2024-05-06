@@ -11,7 +11,7 @@
 #include <regex.h>
 #include <openssl/md5.h>
 
-#define BUFFER_SIZE 1024
+#define BUFFER_SIZE 100050
 #define MAX_FILENAME 255
 #define COMMAND_SIZE 10
 #define NUM_SERVERS 4
@@ -19,7 +19,7 @@
 void *handle_client(void *socket_desc);
 void setup_directory(const char *dir);
 void process_put(int sock, char *filename, char *data, int data_size, int num_servers);
-void process_get(int sock, int chunk_index, int server_index, char *filename);
+void process_get(int sock, const char *filename);
 void process_list(int sock);
 char *get_full_path(const char *dir, const char *filename);
 
@@ -140,9 +140,9 @@ void *handle_client(void *socket_desc) {
     char file_path[1024];
     Packet packet;
     FILE *file = NULL;
+    memset(packet.data, 0, BUFFER_SIZE);  // Ensure buffer is clear before setting EO
 
-    while (recv(sock, &packet, sizeof(Packet), 0) > 0) {
-        printf("received data: %s\n", packet.data);
+    while (recv(sock, &packet, sizeof(Packet), MSG_WAITALL) > 0) {
         printf("Packet Command: %s\n", packet.command);
         if (strcmp(packet.command, "PUT") == 0) {
             char dir_path[1024];
@@ -164,13 +164,12 @@ void *handle_client(void *socket_desc) {
                 file = NULL;
                 printf("File received and closed successfully.\n");
             } else {
-                printf("Writing data to file: %s\n", packet.data);
                 fwrite(packet.data, 1, packet.data_size, file);  // Write data to file
             }
-
+            // memset(packet.data, 0, packet.data_size);  // Ensure buffer is clear before setting EO
         }
         if (strcmp(packet.command, "GET") == 0) {
-            process_get(sock, packet.chunk_indexF, packet.server_indexF, packet.filename);
+            process_get(sock, packet.filename);
         }
         if(strcmp(packet.command, "LIST") == 0){
             process_list(sock);
@@ -184,71 +183,60 @@ void *handle_client(void *socket_desc) {
     return NULL;
 }
 
-void process_get(int sock,int chunk_index, int server_index, char *filename){
-    // Reminder chunk_index and server_index are 1-indexed thus they already had 1 added
-    char dir_path[1024];
-    snprintf(dir_path, sizeof(dir_path), "./dfs%d", server_index);
-    char file_path[1024];
-    snprintf(file_path, sizeof(file_path), "%s/%s_%d", dir_path, filename, chunk_index);
+void process_get(int sock, const char *filename) {
+    DIR *dir;
+    struct dirent *entry;
+    char base_directory[1024] = "."; // Assume current directory is where dfs directories are
 
-    char file_on_server_name[1024];
-    snprintf(file_on_server_name,sizeof(file_on_server_name), "%s_%d", filename, chunk_index);
-
-    printf("File on server: %s\n", file_on_server_name);
-    printf ("sock: %d\n", sock);
-
-    // Open file for reading
-    FILE *file = fopen(file_path, "rb");
-    if (!file) {
-        perror("Failed to open file");
-        return;
-    }
-
-    //Calculate the file size
-    fseek(file, 0, SEEK_END);
-    long file_size = ftell(file);
-    printf("File Size: %ld\n", file_size);
-    fseek(file, 0, SEEK_SET);
-
-    int bufferToUse = BUFFER_SIZE;
-    if(file_size < BUFFER_SIZE){
-        bufferToUse = file_size;
-    }
-
-    //Create Packet
-    Packet packet;
-    memset(&packet, 0, sizeof(Packet));
-    sprintf(packet.command,"%s","GET");
-    sprintf(packet.filename,"%s",file_on_server_name);
-    packet.chunk_indexF = chunk_index;
-    packet.server_indexF = server_index;
-    
-    int current_bytes_read = 0;
-    while(current_bytes_read < file_size){
-        int bytes_read = 0;
-        bytes_read = fread(packet.data, 1, bufferToUse, file);
-        printf("Packet Data: %s\n", packet.data);
-        if(bytes_read <= 0){
-            break;
+    // Iterate over each dfs directory
+    for (int i = 1; i <= 4; i++) {
+        char dfs_directory[1024];
+        snprintf(dfs_directory, sizeof(dfs_directory), "%s/dfs%d", base_directory, i);
+        dir = opendir(dfs_directory);
+        if (!dir) {
+            perror("Failed to open dfs directory");
+            continue;
         }
-        current_bytes_read += bytes_read;
-        packet.data_size = bytes_read;
-        send(sock, &packet, sizeof(Packet), 0);
-    }
-    
-    // Indicate the end of data transfer
-    Packet eofc_packet;
-    memset(&eofc_packet, 0, sizeof(Packet));
-    memset(eofc_packet.data, 0, BUFFER_SIZE);  // Ensure buffer is clear before setting EO
-    sprintf(eofc_packet.command, "%s", "PUT");
-    sprintf(eofc_packet.filename, "%s", filename);
-    sprintf(eofc_packet.data, "%s", "EOF");
-    eofc_packet.chunk_indexF = chunk_index + 1;
-    eofc_packet.server_indexF = server_index + 1;
-    eofc_packet.data_size = strlen("EOF");
-    send(sock, &eofc_packet, sizeof(Packet), 0);
-}
 
+        // Scan the directory for matching file parts
+        while ((entry = readdir(dir)) != NULL) {
+            if (entry->d_type == DT_REG) { // Check if it is a regular file
+                // Match files like "message_1.txt"
+                if (strstr(entry->d_name, filename)) {
+                    char filepath[1024];
+                    snprintf(filepath, sizeof(filepath), "%s/%s", dfs_directory, entry->d_name);
+                    FILE *file = fopen(filepath, "rb");
+                    if (!file) {
+                        perror("Failed to open file part");
+                        continue;
+                    }
+
+                    // Send the file part to the client
+                    char buffer[BUFFER_SIZE];
+                    int bytes_read;
+                    while ((bytes_read = fread(buffer, 1, sizeof(buffer), file)) > 0) {
+                        Packet packet = {0};
+                        strcpy(packet.command, "GET");
+                        sprintf(packet.filename, "%s", entry->d_name); // Include part info in filename
+                        memcpy(packet.data, buffer, bytes_read);
+                        printf("bytes read: %d\n", bytes_read);
+                        packet.data_size = bytes_read;
+                        send(sock, &packet, sizeof(packet), 0);
+                    }
+
+                    fclose(file);
+
+                    // Send EOF marker for this chunk
+                    Packet eof_packet = {0};
+                    memset(eof_packet.data, 0, sizeof(eof_packet.data));
+                    strcpy(eof_packet.data, "EOF");
+                    send(sock, &eof_packet, sizeof(eof_packet), 0);
+                }
+            }
+        }
+        closedir(dir);
+    }
+}
 
 void process_list(int sock) {
     DIR *d, *subdir;
