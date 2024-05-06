@@ -32,29 +32,10 @@ ServerConfig serverConfigs[NUM_SERVERS];
 int serverCount = 0;
 
 int send_to_server_put(int server_index, Packet);
-
-// void read_config(const char *filename) {
-//     FILE *file = fopen(filename, "r");
-//     if (!file) {
-//         perror("Unable to open the configuration file");
-//         exit(EXIT_FAILURE);
-//     }
-
-//     char line[128];
-//     while (fgets(line, sizeof(line), file)) {
-//         if (strncmp(line, "server", 6) == 0) {
-//             sscanf(line, "server dfs%d %[^:]:%d", &serverCount, serverConfigs[serverCount].ip, &serverConfigs[serverCount].port);
-//             serverCount++;
-//         }
-//     }
-//     printf("Server Count: %d\n", serverCount);
-//     fclose(file);
-//     printf("Configuration loaded successfully.\n");
-//     for(int i = 0; i < NUM_SERVERS; i++){
-//         printf("Server %d: %s:%d\n", i, serverConfigs[i].ip, serverConfigs[i].port);
-    
-//     }
-// }
+void read_config(const char *filename);
+int connect_to_server(char *ip, int port);
+int send_to_server_put(int server_index, Packet packet);
+void execute_put_command(const char *filename);  
 
 void read_config(const char *filename) {
     FILE *file = fopen(filename, "r");
@@ -107,68 +88,6 @@ int connect_to_server(char *ip, int port) {
     return sock;
 }
 
-// void send_command(int sock, const char *cmd) {
-//     if (send(sock, cmd, strlen(cmd), 0) < 0) {
-//         puts("Send failed");
-//         return;
-//     }
-// }
-
-void send_command(int sock, const char *cmd, const char *data) {
-    if (data != NULL) {
-        char *full_command = malloc(strlen(cmd) + strlen(data) + 2); // Extra space for space and null-terminator
-        if (full_command == NULL) {
-            perror("Memory allocation failed");
-            return;
-        }
-        sprintf(full_command, "%s %s", cmd, data);
-        if (send(sock, full_command, strlen(full_command), 0) < 0) {
-            puts("Send failed");
-        }
-        free(full_command);
-    } else {
-        if (send(sock, cmd, strlen(cmd), 0) < 0) {
-            puts("Send failed");
-        }
-    }
-}
-
-// void execute_put_command(int sock, const char *filename) {
-//     FILE *file = fopen(filename, "rb");
-//     if (!file) {
-//         perror("Failed to open file");
-//         return;
-//     }
-
-//     Packet packet;
-//     size_t bytes_read;
-
-//     memset(&packet, 0, sizeof(Packet));
-
-//     // Prepare the packet for the PUT command
-//     strcpy(packet.command, "PUT");
-//     strncpy(packet.filename, filename, MAX_FILENAME);
-
-//     while ((bytes_read = fread(packet.data, 1, BUFFER_SIZE, file)) > 0) {
-//         packet.data_size = bytes_read; // Set the data_size field
-//         if (send(sock, &packet, sizeof(Packet), 0) < 0) {
-//             perror("Send failed");
-//             break;
-//         }
-//         memset(packet.data, 0, BUFFER_SIZE);  // Ensure buffer is clear before setting EO
-//     }
-//     printf("End of data\n");
-//     memset(packet.data, 0, BUFFER_SIZE);  // Ensure buffer is clear before setting EO
-//     printf("Data at the Supposed end of data: %s\n", packet.data);
-//     // Indicate the end of data transfer
-//     strcpy(packet.data, "EOF"); // Use any unique sequence to indicate EOF
-//     packet.data_size = strlen(packet.data); // Set the data_size field
-//     printf("Data now sending EOF: %s\n", packet.data);
-//     send(sock, &packet, sizeof(Packet), 0); // Send the complete packet
-
-//     fclose(file);
-// }
-
 int send_to_server_put(int server_index, Packet packet){
     //connect to server
     int sock = connect_to_server(serverConfigs[server_index].ip, serverConfigs[server_index].port);    
@@ -179,6 +98,7 @@ int send_to_server_put(int server_index, Packet packet){
         return -1;
     }
 }
+
 // void execute_put_command(int sock, const char *filename) {
 void execute_put_command(const char *filename) {
     FILE *file = fopen(filename, "rb");
@@ -284,24 +204,10 @@ void receive_data(int sock) {
 
 void execute_command(const char *cmd, char *filename) {
     for (int i = 0; i < serverCount; i++) {
-        // int sock = connect_to_server(serverConfigs[i].ip, serverConfigs[i].port);
-        // if (sock < 0) {
-        //     printf("Failed to connect to server %d\n", i + 1);
-        //     continue;
-        // }
-
         if (strcmp(cmd, "PUT") == 0 && filename != NULL) {
             printf("Executing PUT command\n");
             execute_put_command(filename);
         }
-        // }else {
-        //     printf("Executing other command\n");
-        //     send_command(sock, cmd, NULL);
-        // }
-
-        // receive_data(sock);
-        // close(sock);
-        // printf("Connection to server %d closed\n", i + 1);
     }
 }
 
