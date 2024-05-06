@@ -50,7 +50,7 @@ int send_to_server_put(int server_index, Packet packet);
 void execute_command(const char *cmd, char *filename);
 void execute_put_command(const char *filename); 
 void execute_get_command(const char *filename); 
-void receive_data(int i);
+void receive_chunks(int sock, const char *filename);
 void add_chunk(const char *chunnk);
 void check_completness(void);
 
@@ -114,6 +114,7 @@ int send_to_server_put(int server_index, Packet packet){
         perror("Send failed");
         return -1;
     }
+    return sock;
 }
 
 // void execute_put_command(int sock, const char *filename) {
@@ -208,61 +209,117 @@ void execute_put_command(const char *filename) {
     fclose(file);
 }
 
-void receive_data(int i) {
-    int sock = connect_to_server(serverConfigs[i].ip, serverConfigs[i].port);
-    printf("Receiving data...\n");
-    // Receive a reply from the server
+void receive_chunks(int sock, const char *filename) {
+    FILE *fp = NULL;
+    char filepath[256];
     Packet packet;
-    memset(&packet, 0, sizeof(Packet));
-    while (recv(sock, &packet, sizeof(Packet), 0) > 0)
-    {
-        if (strcmp(packet.data, "EOF") == 0) {
-            printf("End of file reached\n");
+    
+    while (1) {
+        ssize_t received = recv(sock, &packet, sizeof(packet), MSG_WAITALL);
+        if (received <= 0) {
+            if (received == 0)
+                printf("Server closed the connection.\n");
+            else
+                perror("Receive failed");
             break;
         }
-        printf("Received data: %s\n", packet.data);
-        memset(packet.data, 0, sizeof(packet.data));
-        
+
+        if (strcmp(packet.data, "EOF") == 0) {
+            printf("Complete  file part received.\n");
+            if (fp) {
+                fclose(fp);
+                fp = NULL;
+            }
+            return;
+        }
+
+        if (!fp || strcmp(filepath, packet.filename) != 0) {
+            if (fp) {
+                fclose(fp);
+                fp = NULL;
+            }
+            snprintf(filepath, sizeof(filepath), "%s", packet.filename);
+            printf("Receiving file: %s\n", filepath);
+            fp = fopen(filepath, "wb");
+            if (!fp) {
+                perror("Failed to open file for writing");
+                break;
+            }
+        }
+
+        fwrite(packet.data, 1, packet.data_size, fp);
     }
-    puts("");
+
+    if (fp) {
+        fclose(fp);
+    }
+    return;
 }
 
+
 void execute_get_command(const char *filename) {
-    //Calculate Hash To Figure out Distribution Pattern
-    unsigned char hash[MD5_DIGEST_LENGTH];
-    MD5((unsigned char*)filename, strlen(filename), hash);
-    int x = hash[0] % NUM_SERVERS;
-    printf("Hash Pattern(X Value): %d\n", x);
+    printf("Requesting file: %s\n", filename);
+    int sock = connect_to_server(serverConfigs[0].ip, serverConfigs[0].port);
+        if (sock < 0) {
+        perror("Error connecting to server");
+        return;
+    }
 
-    // Define chunk distribution based on the hash index x
-    int server_pairs[4][4][2] = {
-        {{0, 1}, {1, 2}, {2, 3}, {3, 0}},  // x = 0
-        {{3, 0}, {0, 1}, {1, 2}, {2, 3}},  // x = 1
-        {{2, 3}, {3, 0}, {0, 1}, {1, 2}},  // x = 2
-        {{1, 2}, {2, 3}, {3, 0}, {0, 1}}   // x = 3
-    };
+    Packet packet = {0};
+    sprintf(packet.command, "GET");
+    sprintf(packet.filename, "%s", filename);
 
-
-    //Make a command packet to send to the server
+    if(send(sock, &packet, sizeof(Packet), 0) < 0){
+        perror("Failed to send GET command");
+        close(sock);
+        return;
+    }
+    
     for(int i = 0; i < NUM_SERVERS; i++){
         for(int j = 0; j < 2; j++){
-            //Calculate Chunk Index
-            int chunk_index = server_pairs[x][i][j];
-            //Create Packet
-            Packet packet;
-            memset(&packet, 0, sizeof(Packet));
-            sprintf(packet.command, "%s", "GET");
-            sprintf(packet.filename, "%s", filename);
-            packet.chunk_indexF = chunk_index + 1;
-            packet.server_indexF = i + 1;
-            //Send the packet
-            send_to_server_put(i, packet);
-            memset(packet.data, 0, sizeof(packet.data));
-
-            // Receive the data
-            
-            receive_data(i);
+            //Recive Chunks from server
+            receive_chunks(sock, filename);
         }
+    }
+    close(sock);
+
+    //Check 4 parts and Reconstruct File
+    int fourPartsCounter = 0;
+    for(int i = 0; i < 4; i++){
+        char part[100];
+        sprintf(part, "%s_%d", filename, i + 1);
+        printf("Part: %s\n", part);
+        if(part == "%s_%d", filename, i + 1){
+            fourPartsCounter++; 
+        }
+    }
+
+    if(fourPartsCounter == 4){
+        printf("All 4 parts have been received\n");
+        printf("Reconstructing file...\n");
+        char final_path[256];
+        sprintf(final_path, "%s_complete", filename);
+
+        FILE *final_file = fopen(final_path, "wb");
+        for(int i = 0; i < NUM_PARTS; i++){
+            char part_path[256];
+            sprintf(part_path, "%s_%d", filename, i + 1);
+            FILE *part_file = fopen(part_path, "rb");
+
+            char buffer[BUFFER_SIZE];
+            size_t bytes;
+
+            while((bytes = fread(buffer, 1, BUFFER_SIZE, part_file)) > 0){
+                fwrite(buffer, 1, bytes, final_file);
+            }
+            fclose(part_file);
+            //remove(part_path);  
+        }
+        fclose(final_file);
+        printf("File %s has been reconstructed\n", filename);
+    }
+    else if(fourPartsCounter != 4){
+        printf("%s is incomplete\n", filename);
     }
 }
 
